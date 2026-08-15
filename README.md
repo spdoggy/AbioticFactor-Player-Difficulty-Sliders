@@ -13,6 +13,25 @@ Note that I have not tested cross-play functionality, but I hope it will work fo
 
 - UE4SS: https://www.nexusmods.com/abioticfactor/mods/35
 
+
+## Installation
+
+Be sure to install UE4SS first (UE4SS: https://www.nexusmods.com/abioticfactor/mods/35)
+
+The entire mod folder should be placed into the players /ue4ss/Mods folder of your AbioticFactor installation.
+
+i.e Windows:
+`C:\Program Files (x86)\Steam\steamapps\common\AbioticFactor\AbioticFactor\Binaries\Win64\ue4ss\Mods`
+
+Dedicated Server:
+`/AbioticFactor/Binaries/Win64/ue4ss/Mods`
+
+Linux example:
+`/home/sp/.steam/debian-installation/steamapps/common/AbioticFactor/AbioticFactor/Binaries/Win64/ue4ss/Mods`
+
+
+
+
 ## Features
 
 Features implemented so far:
