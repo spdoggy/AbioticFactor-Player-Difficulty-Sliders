@@ -9,6 +9,9 @@ Similar to the functionality of the Sandbox.ini, but on a per-player level.
 This mod is intended to be installed by the Host Player or on a Dedicated Server install running UE4SS.
 Note that I have not tested cross-play functionality, but I hope it will work for all players.
 
+https://www.nexusmods.com/games/abioticfactor/mods/285/
+
+
 ## Requirements
 
 - UE4SS: https://www.nexusmods.com/abioticfactor/mods/35
