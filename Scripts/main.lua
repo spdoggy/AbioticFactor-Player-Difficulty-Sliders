@@ -9,6 +9,8 @@ local ConfigAdmin = require("../config_admin")
 
 local UserConfig = require("../config")
 local UserConfigDmgResist = require("../config_user_dmg_resist")
+local UserConfigArmorSoftcap = require("../config_user_armor_softcap")
+local UserConfigArmorDiminish = require("../config_user_armor_diminish_return_factor")
 local Config = ConfigUtil.ValidateConfig(UserConfig, LogUtil.CreateLogger("PDS (Config)", UserConfig))
 local Log = LogUtil.CreateLogger("PlayerDiffSliders", Config)
 Log("=== [PlayerDiffSliders (PDS)] MOD LOADING ===\n")
@@ -27,21 +29,35 @@ local GameStateHookNotified = false
 -- ============================================================
 -- FUNCTIONS
 -- ============================================================
+---AAbiotic_PlayerCharacter_C function, that sums Current Limb Health
+---@param Player_AAbioticCharacter AAbioticCharacter
+local function GetCurrentHealth(Player_AAbioticCharacter) 
+    return Player_AAbioticCharacter.CurrentHealth_Head + Player_AAbioticCharacter.CurrentHealth_Torso
+        + Player_AAbioticCharacter.CurrentHealth_LeftArm + Player_AAbioticCharacter.CurrentHealth_RightArm
+        + Player_AAbioticCharacter.CurrentHealth_LeftLeg + Player_AAbioticCharacter.CurrentHealth_RightLeg
+end
 
 -- Server Side Supported
 local function HandleClient_ProcessDamage(Context, Damage, DamageType, HitLocation, HitNormal, HitComponent, BoneHitName, DirectionOfSource, Instigator, DamageCauser, HitInfo)
     if not Context then return end
-    local Character = Context:get()
+    local Character = Context:get()  -- AAbioticCharacter
     
-    Log.Debug("HandleClient_ProcessDamage Fired!")
+    -- Check Incoming Damage
     local dmg = Damage:get()
-
-    Log.Debug(string.format("Value: %.2f", dmg))
-
+    Log.Debug(string.format("Damage: %.2f", dmg))
     local outSuccess = { Success = false }
-    local steam_display_name = Character.MyPlayerState:GetPlayerName():ToString()
 
+    -- Get Player Name
+    local steam_display_name = Character.MyPlayerState:GetPlayerName():ToString()
     Log.Debug(string.format("Name: %s", steam_display_name))
+
+    -- Record Starting Health
+    local start_health = GetCurrentHealth(Character)
+    Log.Debug(string.format("Starting Health: %.2f", start_health))
+    if start_health <= 0 then
+        Log.Debug("Player is at zero health before damage calculation, terminating..")
+        return
+    end
 
     -- Use Defaults, and Exit if the User is not in the config list
     if UserConfigDmgResist[steam_display_name] == nil then
@@ -56,33 +72,76 @@ local function HandleClient_ProcessDamage(Context, Damage, DamageType, HitLocati
         return
     end
 
-    dmg_resist = UserConfigDmgResist[steam_display_name]/100
-    Log.Debug(string.format("User %s is registered in config_user_dmg_resist", steam_display_name))
-    Log.Debug(string.format("User %s damage resist is %.2f %%", steam_display_name, dmg_resist*100))
+    -- Handle Armor Difficulty Sliders
+    Log.Debug(string.format("Character.MaxArmorDamageReduction: %.2f %%", Character.MaxArmorDamageReduction)) -- Default is 0.95 %
+    -- TODO
 
-
-    local current_health = Character.CurrentHealth_Head + Character.CurrentHealth_Torso
-            + Character.CurrentHealth_LeftArm + Character.CurrentHealth_RightArm
-            + Character.CurrentHealth_LeftLeg + Character.CurrentHealth_RightLeg
+    -- UserConfigArmorSoftcap
+    if UserConfigArmorSoftcap[steam_display_name] ~= nil then
+        Log.Debug(string.format("Character.ArmorSoftCap: %.2f %%", UserConfigArmorSoftcap[steam_display_name]))
+        Character.ArmorSoftCap = UserConfigArmorSoftcap[steam_display_name]
+    end  
     
-    Log.Debug(string.format("Current Health Before : %.2f", current_health))
-
-    -- Still some loss on this implementation, spreading across multiple limbs and adding an adjust
-    local break_even_adjust = 1.22
-    local limb_spread = 10
-    local dmg_adjust = dmg/limb_spread*break_even_adjust*dmg_resist
-    for i = 1, limb_spread do
-        Character:Server_HealRandomLimb(dmg_adjust, outSuccess)
-        Character:OnRep_CurrentHealth()
+    -- UserConfigArmorDiminish
+    if UserConfigArmorDiminish[steam_display_name] ~= nil then
+        Log.Debug(string.format("Character.DiminishingReturnScalingFactor: %.4f %%", UserConfigArmorDiminish[steam_display_name]))
+        Character.DiminishingReturnScalingFactor = UserConfigArmorDiminish[steam_display_name]
     end  
 
-    -- Character.CurrentHealth_Torso = Character.CurrentHealth_Torso + dmg
-    local current_health = Character.CurrentHealth_Head + Character.CurrentHealth_Torso
-            + Character.CurrentHealth_LeftArm + Character.CurrentHealth_RightArm
-            + Character.CurrentHealth_LeftLeg + Character.CurrentHealth_RightLeg
+    -- Caluclate DR Percentage
+    dmg_resist = UserConfigDmgResist[steam_display_name]/100
+    local targeted_change = dmg*dmg_resist
+    local targeted_health = start_health + targeted_change
+    Log.Debug(string.format("User %s is registered in config_user_dmg_resist", steam_display_name))
+    Log.Debug(string.format("User %s damage resist is %.2f %%", steam_display_name, dmg_resist*100))
+    Log.Debug(string.format("User %s additional damage/recover is %.2f hp", steam_display_name, targeted_change))
+    Log.Debug(string.format("User %s new HP should be %.2f ", steam_display_name, targeted_health))
+
+    -- Still some loss on this implementation, spreading across multiple limbs and multiplying an adjust
+    -- TODO: Method is not precise at all, make some better non-random heal/dmg method
+    local break_even_adjust = 2.0 -- prev 1.22
+    local limb_spread = 10
+    local dmg_adjust = (dmg*break_even_adjust*dmg_resist)/limb_spread
+    local current_health = GetCurrentHealth(Character)
+
+    for i = 1, limb_spread do
+      
+            if current_health <= 0 and dmg_adjust < 0 then
+                break
+            end
+            Character:Server_HealRandomLimb(dmg_adjust, outSuccess)
+            Character:OnRep_CurrentHealth()
+            Character:OnRep_CurrentLeftLegHealth()
+            Character:OnRep_CurrentRightLegHealth()
+            Character:OnRep_CurrentRightArmHealth()
+            Character:OnRep_CurrentLeftArmHealth()
+            Character:OnRep_CurrentTorsoHealth()
+            Character:OnRep_CurrentHeadHealth()
+            current_health = GetCurrentHealth(Character)
+            diff_health = math.abs(targeted_health - current_health)
+            Log.Debug(i)
+            Log.Debug(string.format("Current Health: %.2f", current_health))
+            Log.Debug(string.format("Targeted Health: %.2f", targeted_health))
+            Log.Debug(string.format("Diff to Target: %.2f", diff_health))
+            Log.Debug(string.format("dmg_adjust: %.2f", dmg_adjust))
+    end
+
+    Log.Debug("Health Adj Loop Complete")
     
-    Log.Debug(string.format("Current Health After: %.2f", current_health))
-    -- Function /Script/Engine.PlayerState:GetPlayerName
+    -- Character.CurrentHealth_Torso = Character.CurrentHealth_Torso + dmg
+    local final_health = GetCurrentHealth(Character)
+
+    if final_health <= 0 then
+        print("Player is rendered dead after damage calculation, terminating")
+        Character.Server_PerformDeathSequence()
+    end
+
+    Log.Debug(string.format("Recover: %.2f", dmg_adjust*limb_spread))
+    local actual_change = final_health - start_health
+    Log.Debug(string.format("Current Health After: %.2f", final_health))
+    Log.Debug(string.format("Actual Change: %.2f", actual_change))
+
+
 end
 
 
@@ -148,21 +207,33 @@ local function Handle_Request_SendTextChatMessage(Context, MessageToSend)
     
     local msg_out = ""
     if  max_key == 1 then
-        if (msg_fmt[1] == "HELP" or msg_fmt[1] == "help") then
-            --player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "Supported Admin Commands:", white, player_controller, false)
-            --player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "DR player_displayname dr_number", green, player_controller, false)
-            player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "Supported Player Commands:", white, player_controller, false)
-            player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "SetMyDamageResist dr_number", green, player_controller, false)
-            player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "smdr dr_number", green, player_controller, false)
-            player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "ListDR", green, player_controller, false)
+        if (msg_fmt[1] == "HELP" or msg_fmt[1] == "help"  or msg_fmt[1] == "pds_mod_help") then
+            local delay = 2000
+            ExecuteWithDelay(delay, function()
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "Supported Admin Commands:", white, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "DR player_displayname dr_number", green, player_controller, false)                
+            end)
+
+            delay = delay + 3000
+            ExecuteWithDelay(delay, function()
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "Supported Player Commands:", white, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "SetMyDamageResist dr_number", green, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "smdr dr_number", green, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "listdr", green, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "pds_mod_help", green, player_controller, false)
+            end)
         end
 
         if msg_fmt[1] == "LISTDR" or msg_fmt[1] == "listdr" or msg_fmt[1] == "ListDR" or msg_fmt[1] == "ListDr" then
             player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "Server DR Difficulty Sliders:", white, player_controller, false)
+            local delay = 0
             for player in pairs(UserConfigDmgResist) do
-                dr_setting = UserConfigDmgResist[player]
-                msg_out = string.format("[%s] Damage Resist: %.2f", player, dr_setting)
-                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, msg_out, green, player_controller, false)
+                delay = delay + 1000
+                ExecuteWithDelay(delay, function()
+                    dr_setting = UserConfigDmgResist[player]
+                    msg_out = string.format("[%s] Damage Resist: %.2f", player, dr_setting)
+                    player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, msg_out, green, player_controller, false)
+                end)
             end
         end
     end
@@ -260,9 +331,9 @@ end
 
 
 
--- Hook callback for GameState:ReceiveBeginPlay
+-- Hook GameState:ReceiveBeginPlay
 local function OnGameStateHook(Context)
-    Log.Debug("Abiotic_Survival_GameState:ReceiveBeginPlay fired")
+    Log.Debug("[PDS] Abiotic_Survival_GameState:ReceiveBeginPlay fired")
 
     local gameState = Context:get()
     if not gameState:IsValid() then return end
@@ -277,7 +348,6 @@ end
 
 -- Setup hooks
 local function SetupOnAbioticExeStartHooks()
-    Log.Debug("SetupOnAbioticExeStartHooks:")
     Log.Debug("[PDS] SetupOnAbioticExeStartHooks\n")
 end
 
@@ -300,7 +370,6 @@ local function PollForMissedHook(attempts)
             return
         end
 
-        -- Register hook once any GameState exists (even main menu)
         if not hookRegistered then
             local ok = pcall(RegisterHook,
                 "/Game/Blueprints/Meta/Abiotic_Survival_GameState.Abiotic_Survival_GameState_C:ReceiveBeginPlay",
@@ -312,7 +381,6 @@ local function PollForMissedHook(attempts)
             end
         end
 
-        -- If already in gameplay map, handle current map manually
         local gameState = FindFirstOf("Abiotic_Survival_GameState_C")
         if gameState:IsValid() then
             Log.Debug("Gameplay GameState found, invoking OnGameState")
