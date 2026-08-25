@@ -306,9 +306,27 @@ local function Handle_Request_SendTextChatMessage(Context, MessageToSend)
     end
     
     
+    if (msg_fmt[1] == "bones" or msg_fmt[1] == "bone") and max_key == 2 then
+        Log.Debug("Change Bone Saving Throw")
+        username = steam_display_name
+        new_chance = msg_fmt[2]
+
+        Log.Debug(string.format("[%s] New Bone Break Saving Throw Chance: %.0f %%", username, new_chance))
+        UserConfigBoneBreak[username] = new_chance
+        player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_red, string.format("[%s] New Leg Break Chance: %.0f %%", username, new_chance), color_red, player_controller, false)
+    end
+    
+    
     local msg_out = ""
     if  max_key == 1 then
-        if (msg_fmt[1] == "HELP" or msg_fmt[1] == "help"  or msg_fmt[1] == "pds_mod_help") then
+        local delay = 2000
+        ExecuteWithDelay(delay, function()
+            if (msg_fmt[1] == "HELP" or msg_fmt[1] == "help") then
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "Type pds_mod_help for a list of commands.", color_white, player_controller, false)
+            end
+        end)
+
+        if (msg_fmt[1] == "pds_mod_help") then
             local delay = 2000
             ExecuteWithDelay(delay, function()
                 player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "Supported Admin Commands:", color_white, player_controller, false)
@@ -320,8 +338,15 @@ local function Handle_Request_SendTextChatMessage(Context, MessageToSend)
                 player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "Supported Player Commands:", color_white, player_controller, false)
                 player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "SetMyDamageResist dr_number", color_green, player_controller, false)
                 player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "smdr dr_number", color_green, player_controller, false)
+ 
+            end)
+
+            delay = delay + 3000
+            ExecuteWithDelay(delay, function()
                 player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "listdr", color_green, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "bones break_chance#", color_green, player_controller, false)
                 player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "pds_mod_help", color_green, player_controller, false)
+
             end)
         end
 
