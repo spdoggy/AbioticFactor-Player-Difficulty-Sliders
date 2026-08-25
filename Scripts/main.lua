@@ -11,6 +11,8 @@ local UserConfig = require("../config")
 local UserConfigDmgResist = require("../config_user_dmg_resist")
 local UserConfigArmorSoftcap = require("../config_user_armor_softcap")
 local UserConfigArmorDiminish = require("../config_user_armor_diminish_return_factor")
+local UserConfigBoneBreak = require("../config_user_leg_break_chance")
+
 local Config = ConfigUtil.ValidateConfig(UserConfig, LogUtil.CreateLogger("PDS (Config)", UserConfig))
 local Log = LogUtil.CreateLogger("PlayerDiffSliders", Config)
 Log("=== [PlayerDiffSliders (PDS)] MOD LOADING ===\n")
@@ -19,6 +21,12 @@ Log("=== [PlayerDiffSliders (PDS)] MOD LOADING ===\n")
 -- CONSTANTS
 -- ============================================================
 
+color_white = {R=1, G=1, B=1, A=1}
+color_red = {R=1, G=0, B=0, A=1}
+color_blue = {R=0, G=0, B=1, A=1}
+color_bg = {R=0, G=1, B=1, A=1}
+color_green = {R=0, G=1, B=0, A=1}
+
 
 -- ============================================================
 -- STATE
@@ -26,9 +34,11 @@ Log("=== [PlayerDiffSliders (PDS)] MOD LOADING ===\n")
 local GameStateHookFired = false
 local GameStateHookNotified = false
 
+
+-- ================================================
+-- UTILITY FUNCTIONS
 -- ============================================================
--- FUNCTIONS
--- ============================================================
+
 ---AAbiotic_PlayerCharacter_C function, that sums Current Limb Health
 ---@param Player_AAbioticCharacter AAbioticCharacter
 local function GetCurrentHealth(Player_AAbioticCharacter) 
@@ -36,6 +46,26 @@ local function GetCurrentHealth(Player_AAbioticCharacter)
         + Player_AAbioticCharacter.CurrentHealth_LeftArm + Player_AAbioticCharacter.CurrentHealth_RightArm
         + Player_AAbioticCharacter.CurrentHealth_LeftLeg + Player_AAbioticCharacter.CurrentHealth_RightLeg
 end
+
+
+function split_str(inputstr, sep)
+  if sep == nil then
+    sep = "%s"
+  end
+  local t = {}
+  for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
+    table.insert(t, str)
+  end
+  return t
+end
+
+-- ============================================================
+-- FUNCTIONS
+-- ============================================================
+
+
+
+
 
 -- Server Side Supported
 local function HandleClient_ProcessDamage(Context, Damage, DamageType, HitLocation, HitNormal, HitComponent, BoneHitName, DirectionOfSource, Instigator, DamageCauser, HitInfo)
@@ -92,10 +122,10 @@ local function HandleClient_ProcessDamage(Context, Damage, DamageType, HitLocati
     dmg_resist = UserConfigDmgResist[steam_display_name]/100
     local targeted_change = dmg*dmg_resist
     local targeted_health = start_health + targeted_change
-    Log.Debug(string.format("User %s is registered in config_user_dmg_resist", steam_display_name))
-    Log.Debug(string.format("User %s damage resist is %.2f %%", steam_display_name, dmg_resist*100))
-    Log.Debug(string.format("User %s additional damage/recover is %.2f hp", steam_display_name, targeted_change))
-    Log.Debug(string.format("User %s new HP should be %.2f ", steam_display_name, targeted_health))
+    -- Log.Debug(string.format("User %s is registered in config_user_dmg_resist", steam_display_name))
+    -- Log.Debug(string.format("User %s damage resist is %.2f %%", steam_display_name, dmg_resist*100))
+    -- Log.Debug(string.format("User %s additional damage/recover is %.2f hp", steam_display_name, targeted_change))
+    -- Log.Debug(string.format("User %s new HP should be %.2f ", steam_display_name, targeted_health))
 
     -- Still some loss on this implementation, spreading across multiple limbs and multiplying an adjust
     -- TODO: Method is not precise at all, make some better non-random heal/dmg method
@@ -119,11 +149,11 @@ local function HandleClient_ProcessDamage(Context, Damage, DamageType, HitLocati
             Character:OnRep_CurrentHeadHealth()
             current_health = GetCurrentHealth(Character)
             diff_health = math.abs(targeted_health - current_health)
-            Log.Debug(i)
-            Log.Debug(string.format("Current Health: %.2f", current_health))
-            Log.Debug(string.format("Targeted Health: %.2f", targeted_health))
-            Log.Debug(string.format("Diff to Target: %.2f", diff_health))
-            Log.Debug(string.format("dmg_adjust: %.2f", dmg_adjust))
+            -- Log.Debug(i)
+            -- Log.Debug(string.format("Current Health: %.2f", current_health))
+            -- Log.Debug(string.format("Targeted Health: %.2f", targeted_health))
+            -- Log.Debug(string.format("Diff to Target: %.2f", diff_health))
+            -- Log.Debug(string.format("dmg_adjust: %.2f", dmg_adjust))
     end
 
     Log.Debug("Health Adj Loop Complete")
@@ -145,15 +175,92 @@ local function HandleClient_ProcessDamage(Context, Damage, DamageType, HitLocati
 end
 
 
-function split_str(inputstr, sep)
-  if sep == nil then
-    sep = "%s"
-  end
-  local t = {}
-  for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
-    table.insert(t, str)
-  end
-  return t
+
+local function Handle_Server_ApplyBuff(Context, BuffRow, bOverrideDefaultDuration, NewDuration, Limb, LinkedActor, bSkipDialog)
+
+    -- Log.Debug(">>> Handle_Server_ApplyBuff <<<")
+
+    local overrideDefaultDuration = bOverrideDefaultDuration:get() ---@type boolean
+    local newDuration = NewDuration:get() ---@type float
+    local limb = Limb:get() ---@type EBodyLimbs
+    local linkedActor = LinkedActor:get() ---@type AActor
+    local skipDialog = bSkipDialog:get() ---@type boolean
+
+    buff_row = BuffRow:get()
+    -- Log.Debug("BuffRow: " .. buff_row:GetFullName())
+    -- Log.Debug("BuffRowClassName: " .. buff_row:GetClass():GetFullName())
+    
+
+    local actor = Context:get() -- AActor
+    -- Log.Debug("Actor: " .. actor:GetFullName())
+    -- Log.Debug("ActorClassName: " .. actor:GetClass():GetFullName())
+
+    local actor_owner = actor:GetOwner()
+
+    local gameState = FindFirstOf("GameStateBase")
+    
+    -- local gameState = AFUtils.GetSurvivalGameState()
+    if gameState and gameState.PlayerArray then
+        for i = 1, #gameState.PlayerArray, 1 do
+            local playerState = gameState.PlayerArray[i]
+            if playerState:IsValid() and playerState.PawnPrivate:IsValid() and actor_owner ~= nil then
+                local playerName = playerState.PlayerNamePrivate:ToString()
+                -- Log.Debug("Buff/Debug Player Name:")
+                -- Log.Debug(playerName)
+
+                -- Log.Debug(actor:GetAddress())
+                -- Log.Debug(actor_owner:GetAddress())
+                -- Log.Debug(playerState:GetAddress())
+                
+
+                if actor_owner:GetAddress() == playerState.PawnPrivate:GetAddress() then
+
+                    local buffRow = BuffRow:get() ---@type FBuffDebuffRowHandle
+                    local rowName = buffRow.RowName
+                    local buffRowName = rowName:ToString()
+                    player_controller = playerState:GetPlayerController()
+                    -- Log.Debug("rowName: " )
+                    -- Log.Debug(rowName)
+                    -- Log.Debug(buffRowName)
+
+                    if #buffRowName > 5 and buffRowName:sub(1, 10) == "Debuff_Leg" then
+                        
+                        -- Exit if the User is not in the config list
+                        if UserConfigBoneBreak[playerName] == nil then
+                            return
+                        end
+
+                        local player_config_break_chance = UserConfigBoneBreak[playerName] / 100
+                        local dice_roll = math.random()
+                        local is_dice_roll_success = dice_roll >= player_config_break_chance
+
+
+                        -- If the player passed the check, immediately remove the debuff
+                        if is_dice_roll_success then
+                            NewDuration:set(0.001)
+                            bOverrideDefaultDuration:set(true)
+                            bSkipDialog:set(true)
+                            local msg = string.format("Saving Throw: [Success] No Broken Bones, Difficulty %.0f < %.0f", player_config_break_chance*100, dice_roll*100)
+                            Log.Debug(msg)
+                            player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, msg, color_green, player_controller, false)
+                        else
+                            local msg = string.format("Saving Throw: [Failure] Broken Bones, Difficulty %.0f > %.0f", player_config_break_chance*100, dice_roll*100)
+                            Log.Debug(msg)
+                            player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, msg, color_red, player_controller, false)
+                        end
+                    end
+                end
+
+            end
+        end
+    end
+
+
+
+
+    -- current_buffs = actor.CurrentBuffs
+    -- Log.Debug("current_buffs: " .. current_buffs:GetFullName())
+    -- Log.Debug("current_buffs class: " .. current_buffs:GetClass():GetFullName())
 end
 
 -- Server Side Supported
@@ -172,12 +279,6 @@ local function Handle_Request_SendTextChatMessage(Context, MessageToSend)
             max_key = k
         end
     end
-    
-    white = {R=1, G=1, B=1, A=1}
-    red = {R=1, G=0, B=0, A=1}
-    blue = {R=0, G=0, B=1, A=1}
-    bg = {R=0, G=1, B=1, A=1}
-    green = {R=0, G=1, B=0, A=1}
 
     if msg_fmt[1] == "DR" and max_key == 3 then
         if steam_display_name ~= ConfigAdmin.admin_name then
@@ -191,7 +292,7 @@ local function Handle_Request_SendTextChatMessage(Context, MessageToSend)
 
         Log.Debug(string.format("[%s] New Damage Resist: %.2f", username, new_dr))
         UserConfigDmgResist[username] = new_dr*1.0
-        player_controller:Local_DisplayTextChatMessage("PDS_Mod", red, string.format("[%s] New Damage Resist: %.2f %%", username, new_dr), red, player_controller, false)
+        player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_red, string.format("[%s] New Damage Resist: %.2f %%", username, new_dr), color_red, player_controller, false)
     end
     
     if (msg_fmt[1] == "SetMyDamageResist" or msg_fmt[1] == "smdr") and max_key == 2 then
@@ -201,7 +302,7 @@ local function Handle_Request_SendTextChatMessage(Context, MessageToSend)
 
         Log.Debug(string.format("[%s] New Damage Resist: %.2f", username, new_dr))
         UserConfigDmgResist[username] = new_dr*1.0
-        player_controller:Local_DisplayTextChatMessage("PDS_Mod", red, string.format("[%s] New Damage Resist: %.2f %%", username, new_dr), red, player_controller, false)
+        player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_red, string.format("[%s] New Damage Resist: %.2f %%", username, new_dr), color_red, player_controller, false)
     end
     
     
@@ -210,29 +311,29 @@ local function Handle_Request_SendTextChatMessage(Context, MessageToSend)
         if (msg_fmt[1] == "HELP" or msg_fmt[1] == "help"  or msg_fmt[1] == "pds_mod_help") then
             local delay = 2000
             ExecuteWithDelay(delay, function()
-                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "Supported Admin Commands:", white, player_controller, false)
-                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "DR player_displayname dr_number", green, player_controller, false)                
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "Supported Admin Commands:", color_white, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "DR player_displayname dr_number", color_green, player_controller, false)                
             end)
 
             delay = delay + 3000
             ExecuteWithDelay(delay, function()
-                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "Supported Player Commands:", white, player_controller, false)
-                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "SetMyDamageResist dr_number", green, player_controller, false)
-                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "smdr dr_number", green, player_controller, false)
-                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "listdr", green, player_controller, false)
-                player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "pds_mod_help", green, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "Supported Player Commands:", color_white, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "SetMyDamageResist dr_number", color_green, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "smdr dr_number", color_green, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "listdr", color_green, player_controller, false)
+                player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "pds_mod_help", color_green, player_controller, false)
             end)
         end
 
         if msg_fmt[1] == "LISTDR" or msg_fmt[1] == "listdr" or msg_fmt[1] == "ListDR" or msg_fmt[1] == "ListDr" then
-            player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, "Server DR Difficulty Sliders:", white, player_controller, false)
+            player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, "Server DR Difficulty Sliders:", white, player_controller, false)
             local delay = 0
             for player in pairs(UserConfigDmgResist) do
                 delay = delay + 1000
                 ExecuteWithDelay(delay, function()
                     dr_setting = UserConfigDmgResist[player]
                     msg_out = string.format("[%s] Damage Resist: %.2f", player, dr_setting)
-                    player_controller:Local_DisplayTextChatMessage("PDS_Mod", bg, msg_out, green, player_controller, false)
+                    player_controller:Local_DisplayTextChatMessage("PDS_Mod", color_bg, msg_out, green, player_controller, false)
                 end)
             end
         end
@@ -296,13 +397,18 @@ local function SetupOnGameStateHooks()
     end)
 
 
-    -- These didn't seem to work? Or do I need to test not using the Chopinator?
-    -- /Script/Engine.Actor:ReceiveAnyDamage
-    -- /Script/Engine.GameplayStatics:ApplyDamage
-    -- /Script/Engine.GameplayStatics:ApplyPointDamage
-    -- 
-
-
+    -- bool Server_ApplyBuff(FBuffDebuffRowHandle BuffRow, bool bOverrideDefaultDuration, float NewDuration, EBodyLimbs Limb, class AActor* LinkedActor, bool bSkipDialog);
+    ExecuteWithDelay(2500, function()
+    local okHook, errHook = pcall(RegisterHook,
+        "/Script/AbioticFactor.CharacterBuffComponent:Server_ApplyBuff",
+        Handle_Server_ApplyBuff
+    )
+        if not okHook then
+            Log.Error("Hook registration failed: %s", tostring(errHook))
+        else
+            Log("Hook registration success: Handle_Server_ApplyBuff")
+        end
+    end)
 
 end
 
